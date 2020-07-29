@@ -1,4 +1,5 @@
 import os
+import keyring
 
 from PyQt5.QtCore import QSettings, Qt
 from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QWidget, QFormLayout, QLineEdit, QLabel, QListWidget, \
@@ -25,8 +26,7 @@ configs = {
             'password1': {
                 'desc': 'Password1',
                 'widget': Password,
-                'required': True,
-                'keep': False,
+                'required': True
             },
         },
     'Recovery WiFi':
@@ -35,14 +35,12 @@ configs = {
                 'desc': 'AP2',
                 'widget': QLabel,
                 'default': 'Recovery',
-                'keep': False,
                 'align': Qt.AlignVCenter | Qt.AlignRight
             },
             'password2': {
                 'desc': 'Password2',
                 'widget': QLabel,
                 'default': 'a1b2c3d4',
-                'keep': False,
                 'align': Qt.AlignVCenter | Qt.AlignRight
                 }
         },
@@ -105,7 +103,6 @@ configs = {
                 'desc': 'Password',
                 'widget': Password,
                 'required': True,
-                'keep': False,
             },
         },
     'Module':
@@ -167,7 +164,14 @@ class ConfigWidget(QWidget):
             widget = settings['widget']()
             setattr(self, command, widget)
 
-            value = self.settings.value(command, settings.get('default'))
+            try:
+                if isinstance(widget, Password):
+                    value = keyring.get_password('tasmotizer', command)
+                else:
+                    value = self.settings.value(command, settings.get('default'))
+            except keyring.KeyringError:
+                QMessageBox.critical(self, "Error", "Tasmotizer is unable to use your system keyring")
+
             if value:
                 if isinstance(widget, SpinBox):
                     widget.setValue(int(value))
@@ -214,8 +218,13 @@ class ConfigWidget(QWidget):
 
             if value != settings.get('default') or isinstance(widget, QLabel):
                 commands.append(f'{command} {value}')
-                if settings.get('keep', True):
-                    self.settings.setValue(command, value)
+                try:
+                    if isinstance(widget, Password):
+                        keyring.set_password('tasmotizer', command, value)
+                    else:
+                        self.settings.setValue(command, value)
+                except keyring.KeyringError:
+                    QMessageBox.critical(self, "Error", "Tasmotizer is unable to use your system keyring")
 
         return commands
 

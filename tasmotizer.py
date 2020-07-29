@@ -1,13 +1,14 @@
 #!/usr/bin/env python
-"""Tasmotizer."""
-from datetime import datetime
-import json
 import re
 import sys
+from json.decoder import JSONDecodeError
 
 import serial
 
 import tasmotizer_esptool as esptool
+import json
+
+from datetime import datetime
 
 from PyQt5.QtCore import QUrl, Qt, QThread, QObject, pyqtSignal, pyqtSlot, QSettings, QTimer, QSize, QIODevice
 from PyQt5.QtGui import QPixmap
@@ -233,7 +234,6 @@ class FlashingDialog(QDialog):
 
 
 class Tasmotizer(QDialog):
-    old_pos = None
 
     def __init__(self):
         super().__init__()
@@ -292,18 +292,18 @@ class Tasmotizer(QDialog):
         gbFW = GroupBoxV("Select image", 3)
 
         hl_rb = HLayout(0)
-        rbFile = QRadioButton("BIN file")
+        self.rbFile = QRadioButton("BIN file")
         self.rbRelease = QRadioButton("Release")
         self.rbRelease.setEnabled(False)
         self.rbDev = QRadioButton("Development")
         self.rbDev.setEnabled(False)
 
-        rbgFW = QButtonGroup(gbFW)
-        rbgFW.addButton(rbFile, 0)
-        rbgFW.addButton(self.rbRelease, 1)
-        rbgFW.addButton(self.rbDev, 2)
+        self.rbgFW = QButtonGroup(gbFW)
+        self.rbgFW.addButton(self.rbFile, 0)
+        self.rbgFW.addButton(self.rbRelease, 1)
+        self.rbgFW.addButton(self.rbDev, 2)
 
-        hl_rb.addWidgets([rbFile, self.rbRelease, self.rbDev])
+        hl_rb.addWidgets([self.rbFile, self.rbRelease, self.rbDev])
         gbFW.addLayout(hl_rb)
 
         self.wFile = QWidget()
@@ -364,8 +364,8 @@ class Tasmotizer(QDialog):
         vl.addWidget(self.sb)
 
         pbRefreshPorts.clicked.connect(self.refreshPorts)
-        rbgFW.buttonClicked[int].connect(self.setBinMode)
-        rbFile.setChecked(True)
+        self.rbgFW.buttonClicked[int].connect(self.setBinMode)
+        self.rbFile.setChecked(True)
         pbFile.clicked.connect(self.openBinFile)
 
         self.pbTasmotize.clicked.connect(self.start_process)
@@ -408,29 +408,42 @@ class Tasmotizer(QDialog):
         self.development_data += self.development_reply.readAll()
 
     def processReleaseInfo(self):
-        reply = json.loads(str(self.release_data, 'utf8'))
-        version, bins = list(reply.items())[0]
-        self.rbRelease.setText("Release {}".format(version.lstrip("release-")))
-        if len(bins) > 0:
-            self.cbHackboxBin.clear()
-            for img in bins:
-                img['filesize'] //= 1024
-                self.cbHackboxBin.addItem("{binary} [{filesize}kB]".format(**img), "{otaurl};{binary}".format(**img))
-            self.cbHackboxBin.setEnabled(True)
+        try:
+            reply = json.loads(str(self.release_data, 'utf8'))
+            version, bins = list(reply.items())[0]
+            self.rbRelease.setText("Release {}".format(version.lstrip("release-")))
+            if len(bins) > 0:
+                self.cbHackboxBin.clear()
+                for img in bins:
+                    img['filesize'] //= 1024
+                    self.cbHackboxBin.addItem("{binary} [{filesize}kB]".format(**img), "{otaurl};{binary}".format(**img))
+                self.cbHackboxBin.setEnabled(True)
+        except JSONDecodeError:
+            self.hackbox_exception()
+
+    def hackbox_exception(self):
+        self.setBinMode(0)
+        self.rbFile.setChecked(True)
+        QMessageBox.critical(self, 'Error', f'Tasmotizer was unable to get release data.\n'
+                                            f'Build server unavailable or the data is unreadable.')
 
     def processDevelopmentInfo(self):
-        reply = json.loads(str(self.development_data, 'utf8'))
-        _, cores = list(reply.items())[0]
+        try:
+            reply = json.loads(str(self.development_data, 'utf8'))
+            _, cores = list(reply.items())[0]
 
-        if len(cores) > 0:
-            self.cbHackboxBin.clear()
+            if len(cores) > 0:
+                self.cbHackboxBin.clear()
 
-            for core in list(cores.keys()):
-                for img in cores[core]:
-                    img['filesize'] //= 1024
-                    self.cbHackboxBin.addItem("{binary} [{version}@{}, {commit}, {filesize}kB]".format(core, **img),
-                                              "{otaurl};{}-dev-{version}-{commit}.bin".format(img['binary'].rstrip(".bin"), **img))
-            self.cbHackboxBin.setEnabled(True)
+                for core in list(cores.keys()):
+                    for img in cores[core]:
+                        img['filesize'] //= 1024
+                        self.cbHackboxBin.addItem("{binary} [{version}@{}, {commit}, {filesize}kB]".format(core, **img),
+                                                   "{otaurl};{}-dev-{version}-{commit}.bin"
+                                                  .format(img['binary'].rstrip(".bin"), **img))
+                self.cbHackboxBin.setEnabled(True)
+        except JSONDecodeError:
+            self.hackbox_exception()
 
     def openBinFile(self):
         previous_file = self.settings.value("bin_file")
@@ -484,16 +497,13 @@ class Tasmotizer(QDialog):
         if dlg.exec_() == QDialog.Accepted:
             QMessageBox.information(self, "Done", "Backup successful!")
 
-    def mousePressEvent(self, e):
-        self.old_pos = e.globalPos()
-
-    def mouseMoveEvent(self, e):
-        if self.old_pos is None:
-            self.old_pos = e.globalPos()
-            return
-        delta = e.globalPos() - self.old_pos
-        self.move(self.x() + delta.x(), self.y() + delta.y())
-        self.old_pos = e.globalPos()
+    # def mousePressEvent(self, e):
+    #     self.old_pos = e.globalPos()
+    #
+    # def mouseMoveEvent(self, e):
+    #     delta = e.globalPos() - self.old_pos
+    #     self.move(self.x() + delta.x(), self.y() + delta.y())
+    #     self.old_pos = e.globalPos()
 
     def showCurrentIP(self):
         try:
